@@ -1,0 +1,150 @@
+---
+title: "Machine Learning Course Project"
+author: "John Walker"
+date: "February 12, 2016"
+output: html_document
+fontsize: 9pt
+geometry: margin=0.5in 
+---
+### Executive Summary
+This analysis uses data from a personal fitness monitor like Jawbone Up, Nike FuelBand or Fitbit. This analysis uses data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. In the study they were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The machine learning goal is to predict the manner in which they did the exercise. This is the "classe" variable in the training dataset. 
+The analysis partitions the training data reserving 30% of the observations for validation, fits six machine learning models using these methods
+
+- Random forest
+- Linear discriminant analysis (LDA)
+- Naive Bayes
+- K nearest neighbor (KNN)
+- Gradient boosting machine (GBM)
+- Recursive partitioning and regression tree (Rpart)
+
+then chooses a model based on the lowest out of sample error rate to make the final predictions. 
+A **random forest** model appears to be most accurate - with an out of sample error rate of about 0.5% - so it is used on the test set to predict values using predictors from the test set. Plots of the predictions and of variable importance for the chosen model are included in an appendix.
+
+### Processing
+After loading the function libraries...
+```{r library, message=FALSE}
+require(caret); require(randomForest); require(MASS); require(klaR); require(gbm); require(plyr); 
+require(splines); require(rpart); require(knitr)
+```
+
+```{r wd, echo=FALSE}
+setwd("C:/Users/thewa/Documents/Self/Training/JohnsHopkinsDataScience/08 - Practical Machine Learning/Prog1/MachineLearning")
+
+```
+
+### Input Data Preparation
+Data is read from two separate .csv files - one from training and a second test file for the final prediction. In some cases the files have values that need to be converted to NA as they're read in order to keep the column numeric. The training file has 19,622 rows and 159 columns plus the `class` outcome.
+```{r input, message=FALSE}
+trainCsv <- read.csv("pml-training.csv", sep=",", na.strings=c("NA","#DIV/0!",""))
+testCsv  <- read.csv("pml-testing.csv",  sep=",", na.strings=c("NA","#DIV/0!",""))
+```
+The first columns include a row number, timestamps and some data that could confuse a model without providing information. Once these are removed there are a number of columns there are a number of columns with missing (NA) values. Attempts to use these columns were quite unsuccessful so here we remove any column where 50% or move of the values are NA - and we do the same to the test set.
+```{r cleansing}
+trainSet <- trainCsv[, -(1:7)]                                            #cannot be predictors(time, row)
+trainSet <- trainSet[, colSums(is.na(trainSet)) < nrow(trainSet) * 0.5]   #Drop columns with 50% NA or more
+
+testing  <- testCsv [, -(1:7)]                                            #cannot be predictors(time, row)
+testing  <- testing [, colSums(is.na(testing))  < nrow(testing) * 0.5]    #Drop columns with 50% NA or more
+```
+We partition the training file into a training set and a validation set to check predictions from the models using a 70/30 split. A set is set for reproduceability. The partition function will keep a similar distribution of the 'classe' outcome in the training and validation sets.
+```{r partition}
+set.seed(173)
+inTrain <- createDataPartition(trainSet$classe, p=0.70, list=FALSE)       #Save 30% to validate the models
+training <- trainSet[ inTrain, ]
+validatn <- trainSet[-inTrain, ]
+```
+
+### Fitting and selecting a machine learning model
+Using the training partition we fit a few different classification model types using 10-fold cross validation
+```{r train, warning=FALSE, message=FALSE, cache=TRUE}
+tcontrol <- trainControl(method="cv", number=10, verboseIter = FALSE) 
+modelRF  <- train(classe ~ ., data=training, method="rf",  trControl=tcontrol, ntree=200)
+modelLDA <- train(classe ~ ., data=training, method="lda", trControl=tcontrol)
+modelNB  <- train(classe ~ ., data=training, method="nb" , trControl=tcontrol)
+modelKNN <- train(classe ~ ., data=training, method="knn", trControl=tcontrol)
+modelGBM <- train(classe ~ ., data=training, method="gbm", trControl=tcontrol, verbose=FALSE)
+modelRP  <- train(classe ~ ., data=training, method="rpart",trControl=tcontrol, tuneLength=10)
+```
+Each model can then be used to predict using the validation set where we know the actual outcome.
+```{r validate, warning=FALSE, message=FALSE, cache=TRUE}
+pRF  <- predict(modelRF,  validatn)
+pLDA <- predict(modelLDA, validatn)
+pNB  <- predict(modelNB,  validatn)
+pKNN <- predict(modelKNN, validatn)
+pGBM <- predict(modelGBM, validatn)
+pRP  <- predict(modelRP,  validatn)
+```
+Predictions from the validation set can be compared to the actual outcomes to create a confusion matrix for each model.
+```{r confusion}
+cmRF  <- confusionMatrix(validatn$classe, pRF)
+cmLDA <- confusionMatrix(validatn$classe, pLDA)
+cmNB  <- confusionMatrix(validatn$classe, pNB)
+cmKNN <- confusionMatrix(validatn$classe, pKNN)
+cmGBM <- confusionMatrix(validatn$classe, pGBM)
+cmRP  <- confusionMatrix(validatn$classe, pRP)
+```
+
+### Evaluating Model Results
+For each model type used we look at training accuracy (performance in building the model), validation accuracy (model performance against a separate data set than we used to train the model), validation kappa (measuring validation agreement between actual and predicted values) and the out of sample error - which is one minus validation accuracy.
+```{r metrics}
+ModelType <- c("Random forest", "Linear discriminant","Naive Bayes", "K nearest neighbor", "Gradient boosting machine","Rpart tree")
+TrainAccuracy <- c(max(modelRF$results$Accuracy), max(modelLDA$results$Accuracy), 
+                   max(modelNB$results$Accuracy), max(modelGBM$results$Accuracy), 
+                   max(modelKNN$results$Accuracy), max(modelRP$results$Accuracy))
+ValidationAccuracy <- c(cmRF$overall[1],  cmLDA$overall[1], cmNB$overall[1], 
+                        cmKNN$overall[1], cmGBM$overall[1], cmRP$overall[1])
+ValidationKappa    <- c(cmRF$overall[2],  cmLDA$overall[2], cmNB$overall[2], 
+                        cmKNN$overall[2], cmGBM$overall[2], cmRP$overall[2])
+OutOfSampleErr <- 1 - ValidationAccuracy
+metrics <- data.frame(ModelType, TrainAccuracy, ValidationAccuracy, ValidationKappa, OutOfSampleErr)
+kable(metrics, digits=5)
+```
+
+The model built using the **random forest** method has the lowest out of sample error `r OutOfSampleErr[1]` and is chosen to make the final predictions. It is a bit surprising that multiple models had a better validation accuracy than training accuracy. This behavior is possible but it is common for validation accuracy to be lower than training accuracy due to some degree of overfitting.
+
+Looking at the random forest model and the confusion matrix: accuracy `r cmRF$overall[1]` and kappa `r cmRF$overall[2]` appear to be quite good and the p-value is very low so this model seems to be doing a good job of predicting the output using the validation predictors (the plot in Appendix shows the prediction errors). In the print of the confusion matrix below the sensitivity and specificity of the random forest model both seem to be quite good.The detection rate (the rate of true events also predicted to be events) closely matches the prevalence of the classes.
+```{r finalModel}
+print(modelRF)
+print(cmRF)
+```
+
+### Predicting Test Values
+We now use the random forest model to predict the `r dim(testing)[1]` testing values
+```{r testing}
+pTesting <- predict(modelRF, testing)
+pTesting
+testing$classe <- pTesting               #include predictions in the testing frame
+```
+
+Thanks to [Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H](http://groupware.les.inf.puc-rio.br/har) 
+Thanks also for the examples on recursive feature elimination (RFE) used in the appendix to Jason at [Machine Learning Mastery](http://machinelearningmastery.com/feature-selection-with-the-caret-r-package/). 
+The use of multiple machine learning techniques was greatly simplified by the [caret](http://topepo.github.io/caret/index.html) package. 
+The R markdown for this analysis can be found on [Github](https://github.com/jrwalker-projects/MachineLearning)
+
+### Appendix
+We can plot the prediction for the validation set using two of the predictors pitch_forearm and roll_belt. Dots show correct validation predictions using color to identify the `class`. An incorrect prediction is shown with an X in the color of the incorrect predicted classe. Squares show predictions for the test set. 
+```{r 2dplot, fig.width=10, fig.height=10}
+equalPredictions <- (validatn$classe == pRF)
+neq <- validatn[!equalPredictions, ] #incorrect predictions in the validation set
+ggplot(data=validatn, aes(x=roll_belt, y=pitch_forearm, colour=pRF))+ 
+    geom_point()+ 
+    geom_point(data=neq, aes(x=roll_belt, y=pitch_forearm, colour=classe), size=9,shape=4)+
+    geom_point(data=testing, aes(x=roll_belt, y=pitch_forearm, colour=classe), size=7,shape=0)+
+    ggtitle("Predicted values in Random Forest model plotted across two predictors")
+```
+We can look at variable importance in the random forest model:
+```{r varImp, fig.width=8, fig.height=6}
+varImpRF <- varImp(modelRF, scale=FALSE)
+plot(varImpRF, top=30, main="Variable importance - Random Forest model - top 30 predictors")
+```
+
+Another way to look at variable importance is through recursive feature elimination(RFE). From this perspective the random forest model shows a rapid decline in predictor importance:
+```{r rfe, fig.width=8, fig.height=5, cache=TRUE}
+rfeCtrl <- rfeControl(functions=rfFuncs, method="cv", number=10)                      
+refResults <- rfe(training[,1:52], training[,53], sizes=c(1:50), rfeControl=rfeCtrl)      
+plot(refResults, type=c("g", "o"), main="Recursive Feature Elimination (RFE) using a Random Forest model")
+```
+
+
+
+
